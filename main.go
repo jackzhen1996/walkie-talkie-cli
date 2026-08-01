@@ -39,7 +39,7 @@ type Peer struct {
 
 type CommandLineArgs struct {
 	PeerName         string `arg:"--peer" help:"Peer name"`
-	signalingBaseUrl string `arg:"--signalUrl" help:"Signaling Server URL. Example: http://localhost:8080"`
+	SignalingBaseUrl string `arg:"--signalUrl" help:"Signaling Server URL. Example: http://localhost:8080"`
 }
 
 func InitPeer(peerId string) *Peer {
@@ -96,23 +96,25 @@ func main() {
 
 	// default args
 	args.PeerName = "A"
-	args.signalingBaseUrl = "http://localhost:8080"
+	args.SignalingBaseUrl = "http://localhost:8080"
 	arg.MustParse(&args)
 
-	signalingBaseURL = args.signalingBaseUrl
+	signalingBaseURL = args.SignalingBaseUrl
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop() // Good practice to release resources when main exits
+	defer stop()
 
 	peerEstablishedIndicator := make(chan struct{})
 
+	output, err := initAudioOutput()
+	if err != nil {
+		log.Fatal("Peer could not initialize audio output: ", err)
+	}
+
+	audioOutput = output
 	recorder := InitRecorder()
-	_, err := initAudioOutput()
 
 	go func() {
-		if err != nil {
-			log.Fatal("Peer could not initialize audio output: ", err)
-		}
 		peer = InitPeer(args.PeerName)
 		close(peerEstablishedIndicator)
 	}()
