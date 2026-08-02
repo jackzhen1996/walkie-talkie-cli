@@ -29,6 +29,11 @@ type model struct {
 	chatHistory        []string
 }
 
+// Indicate that the other peer is talking
+type PeerTalkingNotification struct {
+	isPeerTalking bool
+}
+
 func initialModel(recorder *Recorder, peer *Peer, name string) model {
 	return model{
 		name:               name,
@@ -45,6 +50,10 @@ func setupAudioRecorderAndPeer(name string) tea.Msg {
 	return InitPeer(name)
 }
 
+func setPeerTalking(p *tea.Program, isPeerTalking bool) {
+	p.Send(PeerTalkingNotification{isPeerTalking: isPeerTalking})
+}
+
 // Init runs once when the program starts.
 func (m model) Init() tea.Cmd {
 	return func() tea.Msg {
@@ -58,6 +67,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case *Peer:
 		m.peer = msg
 		m.isEstablishingPeer = false
+		return m, nil
+
+	case PeerTalkingNotification:
+		m.isPeerTalking = msg.isPeerTalking
 		return m, nil
 
 	case tea.KeyMsg:
@@ -96,6 +109,7 @@ func (m model) View() string {
 		return lipgloss.JoinVertical(lipgloss.Left, title, "Establishing Connection with peer....")
 	}
 
+	members := fmt.Sprintf("You are chatting with: %s", m.peer.otherPeer)
 	recordIndicator := "Press space to say something..."
 	if m.isRecording {
 		recordIndicator = "Recording...press space again to stop recording"
@@ -103,9 +117,9 @@ func (m model) View() string {
 
 	peerTalkingIndicator := " "
 	if m.isPeerTalking {
-		peerTalkingIndicator = "peer is talking...."
+		peerTalkingIndicator = fmt.Sprintf("%s is talking...", m.peer.otherPeer)
 	}
 
 	helper := helpStyle.Render("q: quit")
-	return lipgloss.JoinVertical(lipgloss.Left, title, peerTalkingIndicator, recordIndicator, helper)
+	return lipgloss.JoinVertical(lipgloss.Left, title, members, peerTalkingIndicator, recordIndicator, helper)
 }

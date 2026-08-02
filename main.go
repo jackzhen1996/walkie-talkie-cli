@@ -26,13 +26,19 @@ import (
 var audioOutput *oto.Context
 var signalingBaseURL string
 var peerName string
+var tui *tea.Program
+
+type PeerSignalPayload struct {
+	PeerName      string                    `json:"peerName"`
+	SignalPayload webrtc.SessionDescription `json:"signalPayload"`
+}
 
 type Peer struct {
 	name       string
 	pc         *webrtc.PeerConnection
 	localTrack *webrtc.TrackLocalStaticSample
-
-	isOfferer bool
+	otherPeer  string
+	isOfferer  bool
 }
 
 type CommandLineArgs struct {
@@ -100,6 +106,7 @@ func main() {
 	recorder := InitRecorder()
 
 	p := tea.NewProgram(initialModel(recorder, peer, peerName))
+	tui = p
 	if _, err := p.Run(); err != nil {
 		fmt.Println("Error running program:", err)
 		os.Exit(1)
@@ -193,10 +200,22 @@ func readIncomingAudio(track *webrtc.TrackRemote) {
 
 	// 5760 = 48000Hz * 120ms, the largest legal Opus frame. Decode() only
 	// fills however many samples the frame actually contains.
-	pcm := make([]int16, 5760)
+	var lastReceivedAudioTs time.Time
 
+	// Jank way of updating the UI to remove the talking indicator
+	go func() {
+		for {
+			if time.Now().Sub(lastReceivedAudioTs) > time.Millisecond*500 {
+				setPeerTalking(tui, false)
+			}
+			time.Sleep(time.Second * 1)
+		}
+	}()
+
+	pcm := make([]int16, 5760)
 	for {
 		rtpPacket, _, err := track.ReadRTP()
+
 		if err != nil {
 			fmt.Println("Peer remote track ended:", err)
 			pipeWriter.Close()
@@ -204,6 +223,10 @@ func readIncomingAudio(track *webrtc.TrackRemote) {
 		}
 
 		n, err := decoder.Decode(rtpPacket.Payload, pcm)
+		// In case a packet is corrupted and can't be read, we still wanna show the talking indicator
+		setPeerTalking(tui, true)
+		lastReceivedAudioTs = time.Now()
+
 		if err != nil {
 			fmt.Println("Peer opus decode error, skipping packet:", err)
 			continue
@@ -214,6 +237,7 @@ func readIncomingAudio(track *webrtc.TrackRemote) {
 			return
 		}
 	}
+
 }
 
 // int16SamplesToBytes converts decoded PCM samples into the little-endian
@@ -345,7 +369,7 @@ func (p *Peer) tryNegotiatePeer() error {
 		//fmt.Println("Could not send offer, try send answer instead")
 		// send answer instead, then poll for offer
 		// poll for offer after sending answer is successful
-		if err := pollForOffer(&offer); err != nil {
+		if err := p.pollForOffer(&offer); err != nil {
 			return fmt.Errorf("Failed to poll for offer")
 		}
 
@@ -380,7 +404,7 @@ func (p *Peer) tryNegotiatePeer() error {
 	p.isOfferer = true
 
 	//fmt.Println("Sent offer, polling for answer")
-	if err := pollForAnswer(p.pc); err != nil {
+	if err := p.pollForAnswer(p.pc); err != nil {
 		return fmt.Errorf("Failed to poll for answer")
 	}
 
@@ -394,10 +418,12 @@ func trySendOffer(pc *webrtc.PeerConnection, offer *webrtc.SessionDescription) e
 	}
 	<-gatherComplete // waits until ICE candidates are embedded in the SDP
 
-	payload, err := json.Marshal(pc.LocalDescription())
-	if err != nil {
-		return err
+	newSignalPayload := PeerSignalPayload{
+		SignalPayload: *pc.LocalDescription(),
+		PeerName:      peerName,
 	}
+
+	payload, err := json.Marshal(newSignalPayload)
 
 	resp, err := http.Post(signalingBaseURL+"/offer", "application/json", bytes.NewReader(payload))
 
@@ -426,10 +452,12 @@ func trySendAnswer(pc *webrtc.PeerConnection) error {
 	}
 	<-gatherComplete
 
-	payload, err := json.Marshal(pc.LocalDescription())
-	if err != nil {
-		return err
+	newSignalPayload := PeerSignalPayload{
+		SignalPayload: *pc.LocalDescription(),
+		PeerName:      peerName,
 	}
+
+	payload, err := json.Marshal(newSignalPayload)
 
 	resp, err := http.Post(signalingBaseURL+"/answer", "application/json", bytes.NewReader(payload))
 
@@ -447,8 +475,7 @@ func trySendAnswer(pc *webrtc.PeerConnection) error {
 
 // runOfferer creates the offer, posts it to the signaling server, then
 // polls for the answer.
-func pollForAnswer(pc *webrtc.PeerConnection) error {
-	//fmt.Println("Peer waiting for answer...")
+func (p *Peer) pollForAnswer(pc *webrtc.PeerConnection) error {
 	for {
 		resp, err := http.Get(signalingBaseURL + "/answer")
 		if err != nil {
@@ -457,18 +484,18 @@ func pollForAnswer(pc *webrtc.PeerConnection) error {
 		defer resp.Body.Close()
 
 		if resp.StatusCode == http.StatusOK {
-			var answer webrtc.SessionDescription
-			if err := json.NewDecoder(resp.Body).Decode(&answer); err != nil {
+			var peerSignalPayload PeerSignalPayload
+			if err := json.NewDecoder(resp.Body).Decode(&peerSignalPayload); err != nil {
 				return err
 			}
-			//fmt.Println("Peer got answer, setting remote description")
-			return pc.SetRemoteDescription(answer)
+			p.otherPeer = peerSignalPayload.PeerName
+			return pc.SetRemoteDescription(peerSignalPayload.SignalPayload)
 		}
 		time.Sleep(time.Second)
 	}
 }
 
-func pollForOffer(offer *webrtc.SessionDescription) error {
+func (p *Peer) pollForOffer(offer *webrtc.SessionDescription) error {
 	for {
 		resp, err := http.Get(signalingBaseURL + "/offer")
 		if err != nil {
@@ -477,9 +504,13 @@ func pollForOffer(offer *webrtc.SessionDescription) error {
 		defer resp.Body.Close()
 
 		if resp.StatusCode == http.StatusOK {
-			if err := json.NewDecoder(resp.Body).Decode(offer); err != nil {
+			var peerSignalPayload PeerSignalPayload
+			if err := json.NewDecoder(resp.Body).Decode(&peerSignalPayload); err != nil {
 				return err
 			}
+			p.otherPeer = peerSignalPayload.PeerName
+			*offer = peerSignalPayload.SignalPayload
+
 			break
 		}
 		time.Sleep(time.Second)
