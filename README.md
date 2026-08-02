@@ -15,6 +15,5 @@ go build .
 ```
 
 ### How to use
-Press space to start recording audio, press space again to send audio. Like
-below:
+Press space to start recording audio, press space again to send audio
 
