@@ -42,7 +42,7 @@ type Peer struct {
 }
 
 type CommandLineArgs struct {
-	PeerName         string `arg:"--peer" help:"Peer name"`
+	PeerName         string `arg:"--name" help:"Peer name"`
 	SignalingBaseUrl string `arg:"--signalUrl" help:"Signaling Server URL. Example: http://localhost:8080"`
 }
 
@@ -63,7 +63,26 @@ func InitPeer(name string) *Peer {
 	if err := newPeer.tryNegotiatePeer(); err != nil {
 		log.Fatal(err)
 	}
+
+	// start the background process of checking for disconnection
+	go func() {
+		for {
+			checkEndpoint := "/offer"
+			if newPeer.isOfferer {
+				checkEndpoint = "/answer"
+			}
+
+			resp, _ := http.Get(signalingBaseURL + checkEndpoint)
+			if resp.StatusCode == http.StatusNotFound {
+				setPeerDisconnection(tui)
+				return
+			}
+			time.Sleep(time.Second * 10)
+		}
+	}()
+
 	return newPeer
+
 }
 
 func (p *Peer) PeerCleanUp() {
@@ -101,6 +120,7 @@ func main() {
 	signalingBaseURL = args.SignalingBaseUrl
 	peerName = args.PeerName
 
+	// Initialize audio capture stuff
 	output := initAudioOutput()
 	audioOutput = output
 	recorder := InitRecorder()
@@ -217,7 +237,6 @@ func readIncomingAudio(track *webrtc.TrackRemote) {
 		rtpPacket, _, err := track.ReadRTP()
 
 		if err != nil {
-			fmt.Println("Peer remote track ended:", err)
 			pipeWriter.Close()
 			return
 		}

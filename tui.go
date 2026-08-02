@@ -25,6 +25,7 @@ type model struct {
 	isRecording        bool
 	isPeerTalking      bool
 	isEstablishingPeer bool
+	isPeerDisconnected bool
 	peerIds            []string
 	chatHistory        []string
 }
@@ -32,6 +33,13 @@ type model struct {
 // Indicate that the other peer is talking
 type PeerTalkingNotification struct {
 	isPeerTalking bool
+}
+
+type PeerEstablishmentNotification struct {
+	peer *Peer
+}
+
+type PeerDisconnectionNotification struct {
 }
 
 func initialModel(recorder *Recorder, peer *Peer, name string) model {
@@ -42,36 +50,47 @@ func initialModel(recorder *Recorder, peer *Peer, name string) model {
 		isRecording:        false,
 		isEstablishingPeer: true,
 		isPeerTalking:      false,
+		isPeerDisconnected: false,
 		peerIds:            []string{"peerA", "peerB"},
 	}
 }
 
-func setupAudioRecorderAndPeer(name string) tea.Msg {
-	return InitPeer(name)
+func setupPeer(name string) tea.Cmd {
+	return func() tea.Msg {
+		return PeerEstablishmentNotification{peer: InitPeer(name)}
+	}
 }
 
 func setPeerTalking(p *tea.Program, isPeerTalking bool) {
 	p.Send(PeerTalkingNotification{isPeerTalking: isPeerTalking})
 }
 
+func setPeerDisconnection(p *tea.Program) {
+	p.Send(PeerDisconnectionNotification{})
+}
+
 // Init runs once when the program starts.
 func (m model) Init() tea.Cmd {
-	return func() tea.Msg {
-		return setupAudioRecorderAndPeer(m.name)
-	}
+	return tea.Batch(setupPeer(m.name))
 }
 
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	// Handle initialization of peer
-	case *Peer:
-		m.peer = msg
+	case PeerEstablishmentNotification:
+		m.peer = msg.peer
 		m.isEstablishingPeer = false
 		return m, nil
 
+	// Handle when the other user is talking
 	case PeerTalkingNotification:
 		m.isPeerTalking = msg.isPeerTalking
 		return m, nil
+
+	case PeerDisconnectionNotification:
+		m.isPeerDisconnected = true
+		m.peer.PeerCleanUp()
+		return m, tea.Quit
 
 	case tea.KeyMsg:
 		switch msg.String() {
@@ -120,6 +139,11 @@ func (m model) View() string {
 		peerTalkingIndicator = fmt.Sprintf("%s is talking...", m.peer.otherPeer)
 	}
 
+	peerDisconnectionIndicator := " "
+	if m.isPeerDisconnected {
+		peerDisconnectionIndicator = "Peer disconnected, exiting"
+	}
+
 	helper := helpStyle.Render("q: quit")
-	return lipgloss.JoinVertical(lipgloss.Left, title, members, peerTalkingIndicator, recordIndicator, helper)
+	return lipgloss.JoinVertical(lipgloss.Left, title, members, peerTalkingIndicator, recordIndicator, peerDisconnectionIndicator, helper)
 }
