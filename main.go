@@ -2,7 +2,6 @@ package main
 
 import (
 	"bytes"
-	"context"
 	"encoding/binary"
 	"encoding/json"
 	"errors"
@@ -18,8 +17,6 @@ import (
 	"log"
 	"net/http"
 	"os"
-	"os/signal"
-	"syscall"
 	"time"
 )
 
@@ -28,9 +25,10 @@ import (
 // track(s) call readIncomingAudio.
 var audioOutput *oto.Context
 var signalingBaseURL string
+var peerName string
 
 type Peer struct {
-	peerId     string
+	name       string
 	pc         *webrtc.PeerConnection
 	localTrack *webrtc.TrackLocalStaticSample
 
@@ -42,8 +40,8 @@ type CommandLineArgs struct {
 	SignalingBaseUrl string `arg:"--signalUrl" help:"Signaling Server URL. Example: http://localhost:8080"`
 }
 
-func InitPeer(peerId string) *Peer {
-	newPeer := &Peer{peerId: peerId, isOfferer: false}
+func InitPeer(name string) *Peer {
+	newPeer := &Peer{name: name, isOfferer: false}
 	pc, localTrack, err := newPeer.setupPeerConnection()
 	if err != nil {
 		log.Fatal(err)
@@ -63,13 +61,9 @@ func InitPeer(peerId string) *Peer {
 }
 
 func (p *Peer) PeerCleanUp() {
-	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
-	<-sigCh
-
-	fmt.Println(fmt.Sprintf("%s shutting down...", p.peerId))
+	fmt.Println(fmt.Sprintf("%s's cli shutting down...", p.name))
 	if err := p.pc.Close(); err != nil {
-		fmt.Println(fmt.Sprintf("%s: error closing peer connection:", p.peerId), err)
+		fmt.Println(fmt.Sprintf("%s: error closing peer connection:", p.name), err)
 	}
 	time.Sleep(500 * time.Millisecond) // give readIncomingAudio a moment to clean up
 
@@ -86,8 +80,7 @@ func (p *Peer) PeerCleanUp() {
 	if err != nil {
 		log.Panic(err)
 	}
-	defer resp.Body.Close()
-	fmt.Println("App graceful shutdown")
+	resp.Body.Close()
 }
 
 func main() {
@@ -100,46 +93,22 @@ func main() {
 	arg.MustParse(&args)
 
 	signalingBaseURL = args.SignalingBaseUrl
+	peerName = args.PeerName
 
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
-
-	peerEstablishedIndicator := make(chan struct{})
-
-	output, err := initAudioOutput()
-	if err != nil {
-		log.Fatal("Peer could not initialize audio output: ", err)
-	}
-
+	output := initAudioOutput()
 	audioOutput = output
 	recorder := InitRecorder()
 
-	go func() {
-		peer = InitPeer(args.PeerName)
-		close(peerEstablishedIndicator)
-	}()
-
-	fmt.Println("Waiting on webRTC peer")
-	<-peerEstablishedIndicator
-	defer peer.PeerCleanUp()
-
-	// Todo: This could be better instead of waiting on arbitrary time
-	fmt.Println("Waiting on audio device to initialize")
-	time.Sleep(time.Second * 5)
-
-	p := tea.NewProgram(initialModel(recorder, peer))
+	p := tea.NewProgram(initialModel(recorder, peer, peerName))
 	if _, err := p.Run(); err != nil {
 		fmt.Println("Error running program:", err)
 		os.Exit(1)
 	}
-
-	<-ctx.Done()
-	peer.PeerCleanUp()
 }
 
 // initAudioOutput creates the process-wide Oto context used for playback.
 // Must be called exactly once - Oto does not support multiple contexts.
-func initAudioOutput() (*oto.Context, error) {
+func initAudioOutput() *oto.Context {
 	op := &oto.NewContextOptions{
 		SampleRate:   48000,
 		ChannelCount: 1, // matches our mono Opus track
@@ -148,10 +117,11 @@ func initAudioOutput() (*oto.Context, error) {
 	}
 	ctx, ready, err := oto.NewContext(op)
 	if err != nil {
-		return nil, err
+		fmt.Println("Failed to initialize audio context", err)
+		os.Exit(1)
 	}
 	<-ready // wait for the audio device to be ready
-	return ctx, nil
+	return ctx
 }
 
 // setupPeerConnection builds a PeerConnection with one outbound audio track
@@ -173,7 +143,7 @@ func (p *Peer) setupPeerConnection() (*webrtc.PeerConnection, *webrtc.TrackLocal
 	}
 
 	localTrack, err := webrtc.NewTrackLocalStaticSample(
-		webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeOpus}, "audio", p.peerId,
+		webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeOpus}, "audio", p.name,
 	)
 	if err != nil {
 		return nil, nil, err
@@ -372,7 +342,7 @@ func (p *Peer) tryNegotiatePeer() error {
 	offer, _ := p.pc.CreateOffer(nil)
 	offerErr := trySendOffer(p.pc, &offer)
 	if offerErr != nil {
-		fmt.Println("Could not send offer, try send answer instead")
+		//fmt.Println("Could not send offer, try send answer instead")
 		// send answer instead, then poll for offer
 		// poll for offer after sending answer is successful
 		if err := pollForOffer(&offer); err != nil {
@@ -499,7 +469,6 @@ func pollForAnswer(pc *webrtc.PeerConnection) error {
 }
 
 func pollForOffer(offer *webrtc.SessionDescription) error {
-	//fmt.Println("Peer waiting for offer...")
 	for {
 		resp, err := http.Get(signalingBaseURL + "/offer")
 		if err != nil {

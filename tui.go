@@ -10,10 +10,7 @@ import (
 var (
 	titleStyle = lipgloss.NewStyle().
 			Bold(true).
-			Foreground(lipgloss.Color("205"))
-
-	selectedStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("42"))
+			Foreground(lipgloss.Color("205")).MarginBottom(2)
 
 	helpStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("241")).
@@ -22,39 +19,60 @@ var (
 
 // ----- Model -----
 type model struct {
-	recorder      *Recorder
-	peer          *Peer
-	isRecording   bool
-	isPeerTalking bool
-	peerIds       []string
-	chatHistory   []string
+	name               string
+	recorder           *Recorder
+	peer               *Peer
+	isRecording        bool
+	isPeerTalking      bool
+	isEstablishingPeer bool
+	peerIds            []string
+	chatHistory        []string
 }
 
-func initialModel(recorder *Recorder, peer *Peer) model {
+func initialModel(recorder *Recorder, peer *Peer, name string) model {
 	return model{
-		recorder:    recorder,
-		peer:        peer,
-		isRecording: false,
-		peerIds:     []string{"peerA", "peerB"},
+		name:               name,
+		recorder:           recorder,
+		peer:               peer,
+		isRecording:        false,
+		isEstablishingPeer: true,
+		isPeerTalking:      false,
+		peerIds:            []string{"peerA", "peerB"},
 	}
+}
+
+func setupAudioRecorderAndPeer(name string) tea.Msg {
+	return InitPeer(name)
 }
 
 // Init runs once when the program starts.
 func (m model) Init() tea.Cmd {
-	return nil
+	return func() tea.Msg {
+		return setupAudioRecorderAndPeer(m.name)
+	}
 }
 
-// Update handles incoming messages (keypresses, custom events, etc.)
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
+	// Handle initialization of peer
+	case *Peer:
+		m.peer = msg
+		m.isEstablishingPeer = false
+		return m, nil
+
 	case tea.KeyMsg:
 		switch msg.String() {
+		// Handle shutdowns
+		case "q", "ctrl+c":
+			m.peer.PeerCleanUp()
+			return m, tea.Quit
 		case " ":
 			if m.isRecording {
 				m.recorder.StopRecording()
 				if err := m.peer.streamPCMBytes(*m.recorder.data, int(m.recorder.sampleRate), 1); err != nil {
 					fmt.Errorf("Error streaming recorded data to peer", err)
 				}
+
 				m.recorder.ClearAudioBuffer()
 				m.isRecording = false
 			} else {
@@ -73,18 +91,21 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 // View renders the UI as a string.
 func (m model) View() string {
-	s := titleStyle.Render("Welcome to Walkie Talkie! \n\n")
-
-	recordIndicator := "Press space to say something...\n"
-	if m.isRecording {
-		recordIndicator = "Recording...press space again to stop recording\n"
+	title := titleStyle.Render(fmt.Sprintf("Welcome to Walkie Talkie, %s!", m.name), " ", " ")
+	if m.isEstablishingPeer {
+		return lipgloss.JoinVertical(lipgloss.Left, title, "Establishing Connection with peer....")
 	}
 
-	peerTalkingIndicator := ""
+	recordIndicator := "Press space to say something..."
+	if m.isRecording {
+		recordIndicator = "Recording...press space again to stop recording"
+	}
+
+	peerTalkingIndicator := " "
 	if m.isPeerTalking {
 		peerTalkingIndicator = "peer is talking...."
 	}
 
-	helper := helpStyle.Render("↑/↓ or j/k: move • enter/space: toggle • q: quit")
-	return lipgloss.JoinVertical(lipgloss.Left, s, peerTalkingIndicator, recordIndicator, helper)
+	helper := helpStyle.Render("q: quit")
+	return lipgloss.JoinVertical(lipgloss.Left, title, peerTalkingIndicator, recordIndicator, helper)
 }
