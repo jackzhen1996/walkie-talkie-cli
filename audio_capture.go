@@ -1,9 +1,3 @@
-// Listens to the default microphone and prints a live volume meter to
-// the terminal. Uses malgo (github.com/gen2brain/malgo), a Go wrapper
-// around the miniaudio C library — no separate system audio library
-// (like PortAudio) needs to be installed, since miniaudio is bundled
-// and compiled via cgo.
-
 package main
 
 import (
@@ -24,7 +18,6 @@ func InitRecorder() *Recorder {
 
 	ctx, err := malgo.InitContext(nil, malgo.ContextConfig{}, func(msg string) {
 		// malgo internal log messages; ignore or fmt.Print(msg) to debug
-		//fmt.Println("[malgo]", msg)
 	})
 
 	if err != nil {
@@ -32,6 +25,7 @@ func InitRecorder() *Recorder {
 		os.Exit(1)
 	}
 
+	// Gets default microphone
 	deviceConfig := malgo.DefaultDeviceConfig(malgo.Capture)
 	deviceConfig.Capture.Format = malgo.FormatS16
 	deviceConfig.Capture.Channels = 1
@@ -67,8 +61,6 @@ func (r *Recorder) ClearAudioBuffer() {
 }
 
 func (r *Recorder) StartRecording() error {
-	//runtime.LockOSThread()
-	//defer runtime.UnlockOSThread()
 	if err := r.device.Start(); err != nil {
 		return err
 	}

@@ -192,7 +192,6 @@ func (p *Peer) setupPeerConnection() (*webrtc.PeerConnection, *webrtc.TrackLocal
 	}()
 
 	pc.OnTrack(func(remoteTrack *webrtc.TrackRemote, receiver *webrtc.RTPReceiver) {
-		//fmt.Println(fmt.Sprintf("%s receiving remote track:", p.peerId), remoteTrack.Codec().MimeType)
 		go readIncomingAudio(remoteTrack)
 	})
 
@@ -301,8 +300,6 @@ func (p *Peer) streamPCMBytes(raw []byte, sampleRate, channels int) error {
 			maxAbs = abs
 		}
 	}
-	//fmt.Printf("total samples: %d, non-zero: %d, max amplitude: %d\n",
-	//	len(samples), nonZero, maxAbs)
 	return p.streamPCM(samples, sampleRate, channels)
 }
 
@@ -312,6 +309,7 @@ func (p *Peer) streamPCM(pcm []int16, sampleRate, channels int) error {
 		return fmt.Errorf("creating opus encoder: %w", err)
 	}
 
+	// Claude is saying:
 	// Opus frames must be an exact legal duration: 2.5/5/10/20/40/60ms.
 	// 20ms matches what the rest of this example (and Opus in general)
 	// typically uses.
@@ -339,8 +337,7 @@ func (p *Peer) streamPCM(pcm []int16, sampleRate, channels int) error {
 	return nil
 }
 
-// streamAudioFile reads an Ogg/Opus file and paces it out onto the track
-// in real time (Opus frames are typically 20ms).
+// Not used, but can be used for sending raw audio file
 func (p *Peer) streamAudioFile(filename string) {
 	file, err := openAudioFile(filename)
 	if err != nil {
@@ -381,13 +378,12 @@ func (p *Peer) streamAudioFile(filename string) {
 	}
 }
 
+// A client can either be the offerer, or the answerer, so we'll try both to see
+// which we are
 func (p *Peer) tryNegotiatePeer() error {
 	offer, _ := p.pc.CreateOffer(nil)
 	offerErr := trySendOffer(p.pc, &offer)
 	if offerErr != nil {
-		//fmt.Println("Could not send offer, try send answer instead")
-		// send answer instead, then poll for offer
-		// poll for offer after sending answer is successful
 		if err := p.pollForOffer(&offer); err != nil {
 			return fmt.Errorf("Failed to poll for offer")
 		}
@@ -422,7 +418,6 @@ func (p *Peer) tryNegotiatePeer() error {
 	}
 	p.isOfferer = true
 
-	//fmt.Println("Sent offer, polling for answer")
 	if err := p.pollForAnswer(p.pc); err != nil {
 		return fmt.Errorf("Failed to poll for answer")
 	}
@@ -492,8 +487,6 @@ func trySendAnswer(pc *webrtc.PeerConnection) error {
 	return nil
 }
 
-// runOfferer creates the offer, posts it to the signaling server, then
-// polls for the answer.
 func (p *Peer) pollForAnswer(pc *webrtc.PeerConnection) error {
 	for {
 		resp, err := http.Get(signalingBaseURL + "/answer")

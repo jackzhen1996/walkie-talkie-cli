@@ -69,7 +69,6 @@ func setPeerDisconnection(p *tea.Program) {
 	p.Send(PeerDisconnectionNotification{})
 }
 
-// Init runs once when the program starts.
 func (m model) Init() tea.Cmd {
 	return tea.Batch(setupPeer(m.name))
 }
@@ -121,7 +120,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// View renders the UI as a string.
 func (m model) View() string {
 	title := titleStyle.Render(fmt.Sprintf("Welcome to Walkie Talkie, %s!", m.name), " ", " ")
 	if m.isEstablishingPeer {
